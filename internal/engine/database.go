@@ -13,14 +13,19 @@ import (
 )
 
 type DB struct {
-	mu           sync.RWMutex
-	dir          string
-	catalog      *catalog.Catalog
-	store        *versions.Store
-	indexes      *index.Registry
-	wal          *journal.WAL
-	sequence     uint64
-	horizon      uint64
+	mu       sync.RWMutex
+	dir      string
+	catalog  *catalog.Catalog
+	store    *versions.Store
+	indexes  *index.Registry
+	wal      *journal.WAL
+	sequence uint64
+	horizon  uint64
+	// lastVacuum holds the physical result of the most recently applied
+	// vacuum record, including records replayed during Open. It lets the
+	// caller report what the durable pass actually released instead of
+	// re-deriving intent.
+	lastVacuum   versions.VacuumResult
 	transactions map[string]*Transaction
 	closed       bool
 	commits      uint64

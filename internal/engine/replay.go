@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"lamina/internal/datum"
 	"lamina/internal/journal"
+	"lamina/internal/versions"
 )
 
 func (d *DB) apply(r journal.Record) error {
@@ -55,10 +56,16 @@ func (d *DB) apply(r journal.Record) error {
 		}
 		d.store.Apply(r.Sequence, r.Writes)
 	case "vacuum":
+		// Horizons are monotonic across restarts: a replayed record may hold
+		// the current floor, but never an older one. The recorded work bounds
+		// reproduce exactly the versions released by the live pass.
 		if r.Horizon < d.horizon || r.Horizon > d.sequence {
 			return fmt.Errorf("invalid vacuum horizon")
 		}
-		d.store.Vacuum(r.Horizon)
+		if r.MaxKeys < 0 || r.MaxRelations < 0 {
+			return fmt.Errorf("invalid vacuum budget")
+		}
+		d.lastVacuum = d.store.Vacuum(versions.VacuumOptions{Horizon: r.Horizon, MaxKeys: r.MaxKeys, MaxRelations: r.MaxRelations})
 		d.horizon = r.Horizon
 	default:
 		return fmt.Errorf("unknown record kind %s", r.Kind)

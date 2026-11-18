@@ -137,12 +137,29 @@ def walkthrough(name,binary):
     require(len(page['records'])==1 and len(page['records'][0]['writes'])==4 and page['cursor']==committed['sequence'],'change page split transaction')
     s.call('GET','/changes?after=999',status=400);observations=page
    elif name=='vacuum':
-    old=s.begin();tx=s.begin();s.put(tx,tuple_(1,amplitude=99));s.commit(tx);requested=s.stats()['sequence']
+    old=s.begin();tx=s.begin()
+    for n in (1,2,3,4):s.put(tx,tuple_(n,amplitude=100+n))
+    s.commit(tx);requested=s.stats()['sequence']
+    plan=s.call('POST','/vacuum/plan',{'horizon':requested})
+    require(plan['pinned'] and plan['horizon']==seed_seq and len(plan['blockers'])==1 and plan['blockers'][0]['snapshot']==seed_seq,'plan did not name the blocking reader')
+    require(plan['unblocked_by_closing']['versions']>=4 and not plan['reached_requested'],'plan hid the cost of waiting for the blocker')
+    dry=s.call('POST','/vacuum',{'horizon':requested,'dry_run':True})
+    require(dry['removed']==0 and dry['horizon']==seed_seq and dry['unblocked_by_closing']['versions']>=4,'dry run claimed a release or hid blocked work')
     pinned=s.call('POST','/vacuum',{'horizon':requested});require(pinned['pinned'] and pinned['horizon']==seed_seq,'vacuum crossed active snapshot')
+    require(pinned['released']['removed']==0 and pinned['remaining']['versions']==0,'blocked pass misreported work')
     require(s.query(transaction=old)['rows'][0]['amplitude']==10,'active snapshot lost')
-    s.call('POST',f'/transactions/{old}/rollback');reclaimed=s.call('POST','/vacuum',{'horizon':requested})
-    require(reclaimed['removed']>=1,'obsolete version not reclaimed');s.call('POST','/query',{'relation':'spectra','at':seed_seq},410)
-    s.call('POST','/checkpoint');s.stop();s.start();require(s.query()['rows'][0]['amplitude']==99,'vacuum did not survive restart');observations={'pinned':pinned,'reclaimed':reclaimed}
+    s.call('POST',f'/transactions/{old}/rollback')
+    first=s.call('POST','/vacuum',{'horizon':requested,'max_keys':2})
+    require(first['released']['removed']==2 and first['released']['budget_exhausted'],'bounded pass ignored its key budget')
+    require(first['remaining']['versions']>=2 and not first['complete'],'bounded pass hid remaining work')
+    second=s.call('POST','/vacuum',{'horizon':requested,'max_keys':2})
+    require(second['released']['removed']>=2 and second['remaining']['versions']==0,'budgeted passes did not converge')
+    require(s.call('GET','/stats')['horizon']==second['horizon'],'durable horizon differs from reported horizon')
+    s.call('POST','/query',{'relation':'spectra','at':seed_seq},410)
+    s.call('POST','/checkpoint');s.stop();s.start();require(s.query()['rows'][0]['amplitude']==101,'vacuum did not survive restart')
+    require(s.stats()['horizon']==second['horizon'],'horizon regressed after restart')
+    s.call('POST','/vacuum',{'horizon':requested-1},400)
+    observations={'plan':plan,'dry_run':{'removed':dry['removed'],'projected':dry['projected']},'pinned':pinned,'first_batch':first,'second_batch':second,'after_restart':s.stats()['horizon']}
    elif name=='transaction-close':
     tx=s.begin();s.put(tx,tuple_(8));s.call('POST',f'/transactions/{tx}/rollback');s.commit(tx,404)
     require(s.query()['matched']==7 and not s.stats()['active'],'rollback leaked state or pin')

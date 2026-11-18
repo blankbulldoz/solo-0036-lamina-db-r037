@@ -14,14 +14,29 @@ func (s *Server) checkpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	write(w, 200, map[string]uint64{"sequence": seq})
 }
+
+// vacuum accepts the documented {"horizon":n} body and the maintenance
+// extensions {"max_keys","max_relations","dry_run"}. A dry run returns the
+// plan without moving the durable floor; a bounded pass reports what it
+// released and what is still pending.
 func (s *Server) vacuum(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Horizon uint64 `json:"horizon"`
-	}
+	var in engine.VacuumRequest
 	if !decode(w, r, &in) {
 		return
 	}
-	out, err := s.db.Vacuum(in.Horizon)
+	out, err := s.db.Vacuum(in)
+	if err != nil {
+		respondError(w, err)
+		return
+	}
+	write(w, 200, out)
+}
+func (s *Server) vacuumPlan(w http.ResponseWriter, r *http.Request) {
+	var in engine.VacuumRequest
+	if !decode(w, r, &in) {
+		return
+	}
+	out, err := s.db.PlanVacuum(in)
 	if err != nil {
 		respondError(w, err)
 		return

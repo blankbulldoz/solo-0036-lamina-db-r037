@@ -1,13 +1,21 @@
 package engine
 
-import "sort"
+import (
+	"lamina/internal/versions"
+	"sort"
+)
 
 type Stats struct {
-	Sequence       uint64         `json:"sequence"`
-	Horizon        uint64         `json:"horizon"`
-	Active         []Transaction  `json:"active"`
-	Keys           int            `json:"keys"`
-	Versions       int            `json:"versions"`
+	Sequence    uint64        `json:"sequence"`
+	Horizon     uint64        `json:"horizon"`
+	SafeThrough uint64        `json:"safe_through"`
+	Active      []Transaction `json:"active"`
+	Blockers    []Blocker     `json:"blockers"`
+	Keys        int           `json:"keys"`
+	Versions    int           `json:"versions"`
+	// Reclaimable is what another vacuum pass at the current durable horizon
+	// can still release, so operators can tell growth from deferred work.
+	Reclaimable    versions.Work  `json:"reclaimable"`
 	IndexEntries   map[string]int `json:"index_entries"`
 	JournalRecords int            `json:"journal_records"`
 	HistoryBase    uint64         `json:"history_base"`
@@ -23,8 +31,24 @@ func (d *DB) Stats() (Stats, error) {
 	if err := d.usable(); err != nil {
 		return Stats{}, err
 	}
-	keys, versions := d.store.Count()
-	s := Stats{Sequence: d.sequence, Horizon: d.horizon, Keys: keys, Versions: versions, Active: []Transaction{}, IndexEntries: map[string]int{}, JournalRecords: len(d.wal.Records), HistoryBase: d.wal.Base, RecoveredTail: d.wal.RecoveredTail, Commits: d.commits, Conflicts: d.conflicts, Queries: d.queries}
+	keys, versions, reclaimable, _ := d.store.Facts(d.horizon)
+	s := Stats{
+		Sequence:       d.sequence,
+		Horizon:        d.horizon,
+		SafeThrough:    d.safeHorizon(),
+		Keys:           keys,
+		Versions:       versions,
+		Reclaimable:    reclaimable,
+		Active:         []Transaction{},
+		Blockers:       d.lowestBlockers(),
+		IndexEntries:   map[string]int{},
+		JournalRecords: len(d.wal.Records),
+		HistoryBase:    d.wal.Base,
+		RecoveredTail:  d.wal.RecoveredTail,
+		Commits:        d.commits,
+		Conflicts:      d.conflicts,
+		Queries:        d.queries,
+	}
 	for _, tx := range d.transactions {
 		copy := *tx
 		copy.writes = nil
